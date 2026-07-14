@@ -1,7 +1,7 @@
 import type { ApiErrorBody, AuthResponse, ListResponse } from "../types";
 
 // const DEFAULT_API_BASE_URL = "http://localhost:3020";
-const DEFAULT_API_BASE_URL = "http://localhost:3020";
+const DEFAULT_API_BASE_URL = "https://bmon.gradusy24.kz";
 
 const API_BASE_URL = normalizeApiBaseUrl(import.meta.env.VITE_API_BASE_URL);
 const API_PREFIX = "/api/v1";
