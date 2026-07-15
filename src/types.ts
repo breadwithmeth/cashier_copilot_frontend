@@ -9,7 +9,9 @@ export type Role =
   | "ANALYST"
   | "OPERATOR"
   | "EMPLOYEE"
-  | "VIEWER";
+  | "VIEWER"
+  | "ANALYTICS_SERVICE"
+  | "INTEGRATION_SERVICE";
 
 export type User = {
   id: string;
@@ -47,6 +49,14 @@ export type ListResponse<T> = {
 };
 
 export type DashboardSummary = {
+  totalReceipts?: number;
+  totalViolations?: number;
+  totalPossibleFinancialRiskAmount?: string | number;
+  cameraAvailability?: Array<{
+    videoStatus?: string;
+    audioStatus?: string;
+    _count?: number;
+  }>;
   receiptsTotal?: number;
   receiptsChecked?: number;
   highRiskViolations?: number;
@@ -75,6 +85,9 @@ export type Violation = {
   eventType?: string;
   violationType?: string;
   severity?: "LOW" | "MEDIUM" | "HIGH" | "CRITICAL";
+  title?: string;
+  occurredAt?: string;
+  confidence?: number | string;
   status: ViolationStatus;
   storeId?: string;
   registerId?: string;
@@ -86,8 +99,10 @@ export type Violation = {
 export type Store = {
   id: string;
   name: string;
+  code?: string;
   city?: string;
   address?: string;
+  timezone?: string;
   isActive?: boolean;
 };
 
@@ -96,14 +111,18 @@ export type Register = {
   name?: string;
   code?: string;
   storeId?: string;
+  registerNumber?: number;
+  workstationId?: string;
   isActive?: boolean;
 };
 
 export type Camera = {
   id: string;
   name?: string;
+  code?: string;
   storeId?: string;
   registerId?: string;
+  locationType?: string;
   videoRtspUrl?: string;
   audioRtspUrl?: string;
   isActive?: boolean;
@@ -123,8 +142,10 @@ export type Receipt = {
   receiptNumber?: string;
   operationType?: "SALE" | "RETURN" | "CANCELLATION" | "VOID" | "RECEIPT_CORRECTION";
   status?: string;
-  total?: number;
-  paid?: number;
+  totalAmount?: number | string;
+  paidAmount?: number | string;
+  total?: number | string;
+  paid?: number | string;
   storeId?: string;
   registerId?: string;
   employeeId?: string;
@@ -160,7 +181,8 @@ export type RoiImage = {
 };
 
 export type CameraRois = {
-  image: RoiImage;
+  image?: RoiImage;
+  referenceImage?: RoiImage;
   cashierRoi: RoiPolygon[];
   scanRoi: RoiPolygon[];
   customerRoi: RoiPolygon[];
@@ -186,4 +208,8 @@ export type TimelineItem<T = unknown> = {
   type: string;
   at: string;
   data: T;
+};
+
+export type TimelineResponse<T = unknown> = {
+  data: Array<TimelineItem<T>>;
 };

@@ -9,6 +9,7 @@ const REFRESH_TOKEN_KEY = "cashier_copilot_refresh_token";
 
 let accessToken: string | null = null;
 let onUnauthorized: (() => void) | null = null;
+let refreshPromise: Promise<boolean> | null = null;
 
 function normalizeApiBaseUrl(value: string | undefined) {
   const rawValue = value?.trim() || DEFAULT_API_BASE_URL;
@@ -56,6 +57,15 @@ async function parseResponse<T>(response: Response): Promise<T> {
 }
 
 async function refreshAccessToken(): Promise<boolean> {
+  if (refreshPromise) return refreshPromise;
+
+  refreshPromise = refreshAccessTokenOnce().finally(() => {
+    refreshPromise = null;
+  });
+  return refreshPromise;
+}
+
+async function refreshAccessTokenOnce(): Promise<boolean> {
   const refreshToken = getRefreshToken();
   if (!refreshToken) return false;
 

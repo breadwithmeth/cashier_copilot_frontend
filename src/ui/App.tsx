@@ -1,8 +1,8 @@
-import { AlertTriangle, BarChart3, Bell, Camera, Cpu, LogOut, MessageSquareText, Plus, ReceiptText, Save, Search, ShieldCheck, StoreIcon, Trash2, Upload } from "lucide-react";
+import { AlertTriangle, BarChart3, Bell, Camera, LogOut, MessageSquareText, Plus, ReceiptText, Save, Search, ShieldCheck, StoreIcon, Trash2, Upload } from "lucide-react";
 import type { ErrorInfo, FormEvent, MouseEvent, ReactNode } from "react";
 import { Component, useEffect, useMemo, useRef, useState } from "react";
 import { api, ApiError, getRefreshToken, setAccessToken, setRefreshToken, setUnauthorizedHandler } from "../api/client";
-import type { Camera as CameraType, CameraRois, DashboardSummary, Receipt, Register, RoiImage, RoiPoint, RoiPolygon, SpeechEvent, Store, TimelineItem, User, Violation, Workstation as WorkstationType } from "../types";
+import type { Camera as CameraType, CameraRois, DashboardSummary, Receipt, Register, RoiImage, RoiPoint, RoiPolygon, SpeechEvent, Store, TimelineItem, TimelineResponse, User, Violation } from "../types";
 
 type Screen = "dashboard" | "violations" | "stores" | "roi" | "transcripts" | "receipts" | "workstation";
 type RoiGroup = "cashierRoi" | "scanRoi" | "customerRoi";
@@ -69,6 +69,8 @@ const roleLabels: Record<string, string> = {
   OPERATOR: "Оператор",
   EMPLOYEE: "Сотрудник",
   VIEWER: "Наблюдатель",
+  ANALYTICS_SERVICE: "Analytics service",
+  INTEGRATION_SERVICE: "Integration service",
 };
 
 function useLoad<T>(loader: () => Promise<T>, fallback: T, deps: unknown[]) {
@@ -185,8 +187,8 @@ export function App() {
 }
 
 function LoginScreen({ error, onLogin }: { error: string | null; onLogin: (email: string, password: string) => Promise<void> }) {
-  const [email, setEmail] = useState("admin@example.com");
-  const [password, setPassword] = useState("Password123!");
+  const [email, setEmail] = useState("admin@gradusy24.kz");
+  const [password, setPassword] = useState("password");
   const [loading, setLoading] = useState(false);
 
   async function submit(event: FormEvent) {
@@ -223,13 +225,17 @@ function LoginScreen({ error, onLogin }: { error: string | null; onLogin: (email
 
 function Dashboard() {
   const { data, loading, error } = useLoad<DashboardSummary>(() => api.get("/dashboard/summary"), {}, []);
+  const totalReceipts = data.totalReceipts ?? data.receiptsTotal ?? 0;
+  const totalViolations = data.totalViolations ?? data.receiptsChecked ?? 0;
+  const possibleRisk = data.totalPossibleFinancialRiskAmount ?? data.potentialRiskAmount ?? 0;
+  const cameraOnline = data.cameraAvailability?.reduce((sum, item) => item.videoStatus === "ONLINE" || item.audioStatus === "ONLINE" ? sum + (item._count ?? 0) : sum, 0) ?? 0;
   const cards = [
-    ["Чеков всего", data.receiptsTotal ?? 0],
-    ["Проверено чеков", data.receiptsChecked ?? 0],
+    ["Чеков всего", totalReceipts],
+    ["AI-событий всего", totalViolations],
     ["High-risk отклонения", data.highRiskViolations ?? 0],
-    ["Риск, сумма", formatMoney(data.potentialRiskAmount ?? 0)],
+    ["Риск, сумма", formatMoney(possibleRisk)],
+    ["Камер онлайн", cameraOnline],
     ["Ошибки интеграции", data.integrationErrors ?? 0],
-    ["Service score", `${data.serviceScore ?? 0}%`],
   ];
 
   return (
@@ -271,7 +277,6 @@ function Stores({ user }: { user: User }) {
   const stores = useLoad(() => api.list<Store>("/stores?page=1&limit=25"), { data: [], pagination: { page: 1, limit: 25, total: 0 } }, [reloadKey]);
   const registers = useLoad(() => api.list<Register>("/registers?page=1&limit=25"), { data: [], pagination: { page: 1, limit: 25, total: 0 } }, [reloadKey]);
   const cameras = useLoad(() => api.list<CameraType>("/cameras?page=1&limit=25"), { data: [], pagination: { page: 1, limit: 25, total: 0 } }, [reloadKey]);
-  const workstations = useLoad(() => api.list<WorkstationType>("/workstations?page=1&limit=25"), { data: [], pagination: { page: 1, limit: 25, total: 0 } }, [reloadKey]);
   const canSeeCredentials = user.role === "ADMIN" || user.role === "SUPER_ADMIN";
   const reload = () => setReloadKey((value) => value + 1);
 
@@ -281,30 +286,22 @@ function Stores({ user }: { user: User }) {
         <CreateStoreForm onCreated={reload} />
         <CreateRegisterForm stores={stores.data.data} onCreated={reload} />
         <CreateCameraForm stores={stores.data.data} registers={registers.data.data} onCreated={reload} />
-        <CreateWorkstationForm stores={stores.data.data} registers={registers.data.data} onCreated={reload} />
       </div>
 
       <div className="split">
         <div>
         <StatusLine loading={stores.loading} error={stores.error} />
         <h2><StoreIcon size={18} /> Магазины</h2>
-        <DataTable headers={["Название", "Город", "Статус"]} rows={stores.data.data.map((s) => [s.name, s.city ?? "-", s.isActive === false ? "Отключен" : "Активен"])} empty="Магазины не найдены" />
+        <DataTable headers={["Название", "Код", "Город", "Статус"]} rows={stores.data.data.map((s) => [s.name, s.code ?? "-", s.city ?? "-", s.isActive === false ? "Отключен" : "Активен"])} empty="Магазины не найдены" />
         </div>
         <div>
         <StatusLine loading={registers.loading || cameras.loading} error={registers.error ?? cameras.error} />
         <h2><Camera size={18} /> Кассы и камеры</h2>
-        <DataTable headers={["Касса", "Магазин", "Статус"]} rows={registers.data.data.map((r) => [r.name ?? r.code ?? r.id, r.storeId ?? "-", r.isActive === false ? "Отключена" : "Активна"])} empty="Кассы не найдены" />
+        <DataTable headers={["Касса", "Код", "Workstation", "Статус"]} rows={registers.data.data.map((r) => [r.name ?? r.code ?? r.id, r.code ?? "-", r.workstationId ?? "-", r.isActive === false ? "Отключена" : "Активна"])} empty="Кассы не найдены" />
         <DataTable
-          headers={["Камера", "RTSP", "Статус"]}
-          rows={cameras.data.data.map((c) => [c.name ?? c.id, canSeeCredentials ? c.videoRtspUrl ?? "скрыто" : "скрыто", c.isActive === false ? "Отключена" : "Активна"])}
+          headers={["Камера", "Код", "RTSP", "Статус"]}
+          rows={cameras.data.data.map((c) => [c.name ?? c.id, c.code ?? "-", canSeeCredentials ? c.videoRtspUrl ?? "скрыто" : "скрыто", c.isActive === false ? "Отключена" : "Активна"])}
           empty="Камеры не найдены"
-        />
-        <StatusLine loading={workstations.loading} error={workstations.error} />
-        <h2><Cpu size={18} /> Рабочие места</h2>
-        <DataTable
-          headers={["Рабочее место", "Магазин", "Касса", "Статус"]}
-          rows={workstations.data.data.map((w) => [w.name ?? w.code ?? w.id, w.storeId ?? "-", w.registerId ?? "-", w.isActive === false ? "Отключено" : "Активно"])}
-          empty="Рабочие места не найдены"
         />
         </div>
       </div>
@@ -314,22 +311,29 @@ function Stores({ user }: { user: User }) {
 
 function CreateStoreForm({ onCreated }: { onCreated: () => void }) {
   const [name, setName] = useState("");
+  const [code, setCode] = useState("");
   const [city, setCity] = useState("");
   const [address, setAddress] = useState("");
+  const [timezone, setTimezone] = useState("Asia/Almaty");
   return (
     <CreateForm
       title="Создать магазин"
       onSubmit={async () => {
-        await api.post<Store>("/stores", compact({ name, city, address, isActive: true }));
+        const normalizedCode = code.trim() || slugify(name) || `store-${Date.now()}`;
+        await api.post<Store>("/stores", compact({ name, code: normalizedCode, city, address: address || name, timezone, isActive: true, metadata: {} }));
         setName("");
+        setCode("");
         setCity("");
         setAddress("");
+        setTimezone("Asia/Almaty");
         onCreated();
       }}
     >
       <label>Название<input required value={name} onChange={(event) => setName(event.target.value)} /></label>
+      <label>Код интеграции<input value={code} onChange={(event) => setCode(event.target.value)} placeholder={slugify(name) || "tolstogo-90"} /></label>
       <label>Город<input value={city} onChange={(event) => setCity(event.target.value)} /></label>
       <label>Адрес<input value={address} onChange={(event) => setAddress(event.target.value)} /></label>
+      <label>Timezone<input value={timezone} onChange={(event) => setTimezone(event.target.value)} /></label>
     </CreateForm>
   );
 }
@@ -338,19 +342,26 @@ function CreateRegisterForm({ stores, onCreated }: { stores: Store[]; onCreated:
   const [name, setName] = useState("");
   const [code, setCode] = useState("");
   const [storeId, setStoreId] = useState("");
+  const [registerNumber, setRegisterNumber] = useState("");
+  const [workstationId, setWorkstationId] = useState("");
   return (
     <CreateForm
       title="Создать кассу"
       onSubmit={async () => {
-        await api.post<Register>("/registers", compact({ name, code, storeId, isActive: true }));
+        const normalizedCode = code.trim() || slugify(name) || `register-${Date.now()}`;
+        await api.post<Register>("/registers", compact({ name, code: normalizedCode, storeId, registerNumber: toOptionalNumber(registerNumber), workstationId, isActive: true }));
         setName("");
         setCode("");
         setStoreId("");
+        setRegisterNumber("");
+        setWorkstationId("");
         onCreated();
       }}
     >
       <label>Название<input required value={name} onChange={(event) => setName(event.target.value)} /></label>
-      <label>Код<input value={code} onChange={(event) => setCode(event.target.value)} /></label>
+      <label>Код интеграции<input value={code} onChange={(event) => setCode(event.target.value)} placeholder={slugify(name) || "register-1"} /></label>
+      <label>Номер кассы<input value={registerNumber} onChange={(event) => setRegisterNumber(event.target.value)} type="number" min="1" /></label>
+      <label>Workstation ID<input value={workstationId} onChange={(event) => setWorkstationId(event.target.value)} placeholder="workstation-1" /></label>
       <SelectStore stores={stores} value={storeId} onChange={setStoreId} required />
     </CreateForm>
   );
@@ -358,6 +369,7 @@ function CreateRegisterForm({ stores, onCreated }: { stores: Store[]; onCreated:
 
 function CreateCameraForm({ stores, registers, onCreated }: { stores: Store[]; registers: Register[]; onCreated: () => void }) {
   const [name, setName] = useState("");
+  const [code, setCode] = useState("");
   const [storeId, setStoreId] = useState("");
   const [registerId, setRegisterId] = useState("");
   const [videoRtspUrl, setVideoRtspUrl] = useState("");
@@ -366,8 +378,10 @@ function CreateCameraForm({ stores, registers, onCreated }: { stores: Store[]; r
     <CreateForm
       title="Создать камеру"
       onSubmit={async () => {
-        await api.post<CameraType>("/cameras", compact({ name, storeId, registerId, videoRtspUrl, audioRtspUrl, isActive: true }));
+        const normalizedCode = code.trim() || slugify(name) || `camera-${Date.now()}`;
+        await api.post<CameraType>("/cameras", compact({ name, code: normalizedCode, storeId, registerId, locationType: "CHECKOUT", videoEnabled: Boolean(videoRtspUrl), videoRtspUrl, audioEnabled: Boolean(audioRtspUrl), audioRtspUrl, isActive: true }));
         setName("");
+        setCode("");
         setStoreId("");
         setRegisterId("");
         setVideoRtspUrl("");
@@ -376,35 +390,11 @@ function CreateCameraForm({ stores, registers, onCreated }: { stores: Store[]; r
       }}
     >
       <label>Название<input required value={name} onChange={(event) => setName(event.target.value)} /></label>
+      <label>Код интеграции<input value={code} onChange={(event) => setCode(event.target.value)} placeholder={slugify(name) || "cam10"} /></label>
       <SelectStore stores={stores} value={storeId} onChange={setStoreId} required />
       <SelectRegister registers={registers} value={registerId} onChange={setRegisterId} />
       <label>Video RTSP<input value={videoRtspUrl} onChange={(event) => setVideoRtspUrl(event.target.value)} placeholder="rtsp://user:pass@host/video" /></label>
       <label>Audio RTSP<input value={audioRtspUrl} onChange={(event) => setAudioRtspUrl(event.target.value)} placeholder="rtsp://user:pass@host/audio" /></label>
-    </CreateForm>
-  );
-}
-
-function CreateWorkstationForm({ stores, registers, onCreated }: { stores: Store[]; registers: Register[]; onCreated: () => void }) {
-  const [name, setName] = useState("");
-  const [code, setCode] = useState("");
-  const [storeId, setStoreId] = useState("");
-  const [registerId, setRegisterId] = useState("");
-  return (
-    <CreateForm
-      title="Создать рабочее место"
-      onSubmit={async () => {
-        await api.post<WorkstationType>("/workstations", compact({ name, code, storeId, registerId, isActive: true }));
-        setName("");
-        setCode("");
-        setStoreId("");
-        setRegisterId("");
-        onCreated();
-      }}
-    >
-      <label>Название<input required value={name} onChange={(event) => setName(event.target.value)} /></label>
-      <label>Код<input value={code} onChange={(event) => setCode(event.target.value)} placeholder="workstation-1" /></label>
-      <SelectStore stores={stores} value={storeId} onChange={setStoreId} required />
-      <SelectRegister registers={registers} value={registerId} onChange={setRegisterId} />
     </CreateForm>
   );
 }
@@ -471,7 +461,7 @@ function Receipts() {
       <StatusLine loading={loading} error={error} />
       <DataTable
         headers={["Номер", "Операция", "Сумма", "Создано"]}
-        rows={data.data.map((item) => [item.receiptNumber ?? item.id, item.operationType ?? "-", formatMoney(item.total ?? 0), formatDate(item.createdAt)])}
+        rows={data.data.map((item) => [item.receiptNumber ?? item.id, item.operationType ?? "-", formatMoney(item.totalAmount ?? item.total ?? 0), formatDate(item.createdAt)])}
         empty="Чеки не найдены"
       />
     </section>
@@ -518,8 +508,9 @@ function RoiMarkup() {
         if (imageUrl) URL.revokeObjectURL(imageUrl);
         const nextUrl = URL.createObjectURL(blob);
         setImageUrl(nextUrl);
-        const fallbackImage = await imageMetadataFromUrl(nextUrl, roiData?.image?.id ?? cameraId);
-        setImage(roiData?.image ?? fallbackImage);
+        const roiImage = roiData?.image ?? roiData?.referenceImage;
+        const fallbackImage = await imageMetadataFromUrl(nextUrl, roiImage?.id ?? cameraId);
+        setImage(roiImage ?? fallbackImage);
         if (roiData) {
           setRois(normalizeRois(roiData));
         } else {
@@ -558,8 +549,8 @@ function RoiMarkup() {
     setStatus("Загрузка изображения...");
     setError(null);
     try {
-      const uploaded = await api.upload<RoiImage>(`/cameras/${cameraId}/roi-reference-image`, formData);
-      setImage(uploaded);
+      const uploaded = await api.upload<RoiImage | { referenceImage?: RoiImage; image?: RoiImage }>(`/cameras/${cameraId}/roi-reference-image`, formData);
+      setImage(extractRoiImage(uploaded) ?? await imageMetadataFromFile(file, cameraId));
       const url = URL.createObjectURL(file);
       if (imageUrl) URL.revokeObjectURL(imageUrl);
       setImageUrl(url);
@@ -775,8 +766,8 @@ function Transcripts() {
     setTimelineError(null);
     setTimelineItems([]);
     try {
-      const timeline = await api.get<Array<TimelineItem<SpeechEvent>>>(`/checkout-sessions/${encodeURIComponent(timelineSessionId.trim())}/timeline`);
-      setTimelineItems(timeline.filter((item): item is TimelineItem<SpeechEvent> => item.type === "speech"));
+      const timeline = await api.get<TimelineResponse<SpeechEvent> | Array<TimelineItem<SpeechEvent>>>(`/checkout-sessions/${encodeURIComponent(timelineSessionId.trim())}/timeline`);
+      setTimelineItems(normalizeTimeline(timeline).filter((item): item is TimelineItem<SpeechEvent> => item.type === "speech"));
       setTimelineLoadedFor(timelineSessionId.trim());
     } catch (err) {
       setTimelineError(err instanceof ApiError ? err.body.message : "Не удалось загрузить timeline");
@@ -929,6 +920,21 @@ function compact<T extends Record<string, unknown>>(payload: T) {
   return Object.fromEntries(Object.entries(payload).filter(([, value]) => value !== "" && value !== undefined && value !== null));
 }
 
+function slugify(value: string) {
+  return value
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "");
+}
+
+function toOptionalNumber(value: string) {
+  const trimmed = value.trim();
+  if (!trimmed) return undefined;
+  const parsed = Number(trimmed);
+  return Number.isFinite(parsed) ? parsed : undefined;
+}
+
 function hasEntityId<T extends { id?: unknown }>(value: T | null | undefined): value is T & { id: string } {
   return typeof value?.id === "string" && value.id.length > 0;
 }
@@ -959,6 +965,20 @@ function imageMetadataFromUrl(url: string, id: string): Promise<RoiImage> {
     img.onerror = () => resolve({ id, width: 1, height: 1 });
     img.src = url;
   });
+}
+
+function imageMetadataFromFile(file: File, id: string): Promise<RoiImage> {
+  const url = URL.createObjectURL(file);
+  return imageMetadataFromUrl(url, id).finally(() => URL.revokeObjectURL(url));
+}
+
+function extractRoiImage(value: RoiImage | { referenceImage?: RoiImage; image?: RoiImage } | null | undefined): RoiImage | null {
+  if (!value || typeof value !== "object") return null;
+  const maybeImage = value as Partial<RoiImage>;
+  if (typeof maybeImage.id === "string" && typeof maybeImage.width === "number" && typeof maybeImage.height === "number") {
+    return maybeImage as RoiImage;
+  }
+  return "referenceImage" in value ? value.referenceImage ?? value.image ?? null : null;
 }
 
 function normalizeRoiGroup(value: unknown): RoiPolygon[] {
@@ -1013,6 +1033,10 @@ function buildSpeechEventsPath(registerId: string, sessionId: string, page = 1, 
   if (registerId.trim()) params.set("registerId", registerId.trim());
   if (sessionId.trim()) params.set("sessionId", sessionId.trim());
   return `/speech-events?${params.toString()}`;
+}
+
+function normalizeTimeline<T>(value: TimelineResponse<T> | Array<TimelineItem<T>>): Array<TimelineItem<T>> {
+  return Array.isArray(value) ? value : value.data;
 }
 
 function speakerLabel(value: SpeechEvent["speakerType"]) {
@@ -1076,6 +1100,7 @@ function formatTime(value: string) {
   return new Intl.DateTimeFormat("ru-RU", { timeStyle: "medium" }).format(new Date(value));
 }
 
-function formatMoney(value: number) {
-  return new Intl.NumberFormat("ru-RU", { style: "currency", currency: "KZT", maximumFractionDigits: 0 }).format(value);
+function formatMoney(value: number | string) {
+  const numericValue = typeof value === "string" ? Number(value) : value;
+  return new Intl.NumberFormat("ru-RU", { style: "currency", currency: "KZT", maximumFractionDigits: 0 }).format(Number.isFinite(numericValue) ? numericValue : 0);
 }
