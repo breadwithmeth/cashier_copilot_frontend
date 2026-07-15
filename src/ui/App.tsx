@@ -1,6 +1,6 @@
 import { AlertTriangle, BarChart3, Bell, Camera, Cpu, LogOut, MessageSquareText, Plus, ReceiptText, Save, Search, ShieldCheck, StoreIcon, Trash2, Upload } from "lucide-react";
-import type { FormEvent, MouseEvent, ReactNode } from "react";
-import { useEffect, useMemo, useRef, useState } from "react";
+import type { ErrorInfo, FormEvent, MouseEvent, ReactNode } from "react";
+import { Component, useEffect, useMemo, useRef, useState } from "react";
 import { api, ApiError, getRefreshToken, setAccessToken, setRefreshToken, setUnauthorizedHandler } from "../api/client";
 import type { Camera as CameraType, CameraRois, DashboardSummary, Receipt, Register, RoiImage, RoiPoint, RoiPolygon, SpeechEvent, Store, TimelineItem, User, Violation, Workstation as WorkstationType } from "../types";
 
@@ -11,6 +11,29 @@ type TranscriptRefs = {
   registers: Map<string, Register>;
   cameras: Map<string, CameraType>;
 };
+
+type ErrorBoundaryState = {
+  error: string | null;
+};
+
+class ErrorBoundary extends Component<{ children: ReactNode }, ErrorBoundaryState> {
+  state: ErrorBoundaryState = { error: null };
+
+  static getDerivedStateFromError(error: Error) {
+    return { error: error.message };
+  }
+
+  componentDidCatch(error: Error, info: ErrorInfo) {
+    console.error(error, info.componentStack);
+  }
+
+  render() {
+    if (this.state.error) {
+      return <div className="content"><div className="status warning"><AlertTriangle size={16} /> Ошибка экрана: {this.state.error}</div></div>;
+    }
+    return this.props.children;
+  }
+}
 
 const screens: Array<{ id: Screen; label: string; icon: typeof BarChart3 }> = [
   { id: "dashboard", label: "Дашборд", icon: BarChart3 },
@@ -147,13 +170,15 @@ export function App() {
             </button>
           </div>
         </header>
-        {screen === "dashboard" && <Dashboard />}
-        {screen === "violations" && <Violations />}
-        {screen === "stores" && <Stores user={user} />}
-        {screen === "roi" && <RoiMarkup />}
-        {screen === "transcripts" && <Transcripts />}
-        {screen === "receipts" && <Receipts />}
-        {screen === "workstation" && <Workstation />}
+        <ErrorBoundary key={screen}>
+          {screen === "dashboard" && <Dashboard />}
+          {screen === "violations" && <Violations />}
+          {screen === "stores" && <Stores user={user} />}
+          {screen === "roi" && <RoiMarkup />}
+          {screen === "transcripts" && <Transcripts />}
+          {screen === "receipts" && <Receipts />}
+          {screen === "workstation" && <Workstation />}
+        </ErrorBoundary>
       </main>
     </div>
   );
@@ -455,7 +480,10 @@ function Receipts() {
 
 function RoiMarkup() {
   const cameras = useLoad(() => api.list<CameraType>("/cameras?page=1&limit=100"), { data: [], pagination: { page: 1, limit: 100, total: 0 } }, []);
+  const stores = useLoad(() => api.list<Store>("/stores?page=1&limit=100"), { data: [], pagination: { page: 1, limit: 100, total: 0 } }, []);
+  const registers = useLoad(() => api.list<Register>("/registers?page=1&limit=100"), { data: [], pagination: { page: 1, limit: 100, total: 0 } }, []);
   const [cameraId, setCameraId] = useState("");
+  const [cameraSearch, setCameraSearch] = useState("");
   const [image, setImage] = useState<RoiImage | null>(null);
   const [imageUrl, setImageUrl] = useState<string | null>(null);
   const [rois, setRois] = useState(emptyRois);
@@ -465,6 +493,16 @@ function RoiMarkup() {
   const [status, setStatus] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const imageBoxRef = useRef<HTMLDivElement | null>(null);
+  const cameraOptions = cameras.data.data.filter(hasEntityId);
+  const cameraRefs = useMemo(() => ({
+    stores: new Map(stores.data.data.filter(hasEntityId).map((store) => [store.id, store])),
+    registers: new Map(registers.data.data.filter(hasEntityId).map((register) => [register.id, register])),
+  }), [stores.data.data, registers.data.data]);
+  const filteredCameraOptions = useMemo(() => {
+    const search = cameraSearch.trim().toLowerCase();
+    if (!search) return cameraOptions;
+    return cameraOptions.filter((camera) => cameraSearchText(camera, cameraRefs).includes(search));
+  }, [cameraOptions, cameraRefs, cameraSearch]);
 
   useEffect(() => {
     if (!cameraId) return;
@@ -476,19 +514,15 @@ function RoiMarkup() {
       api.blob(`/cameras/${cameraId}/roi-reference-image`),
       api.get<CameraRois>(`/cameras/${cameraId}/rois`).catch(() => null),
     ])
-      .then(([blob, roiData]) => {
+      .then(async ([blob, roiData]) => {
         if (imageUrl) URL.revokeObjectURL(imageUrl);
         const nextUrl = URL.createObjectURL(blob);
         setImageUrl(nextUrl);
+        const fallbackImage = await imageMetadataFromUrl(nextUrl, roiData?.image?.id ?? cameraId);
+        setImage(roiData?.image ?? fallbackImage);
         if (roiData) {
-          setImage(roiData.image);
-          setRois({
-            cashierRoi: roiData.cashierRoi ?? [],
-            scanRoi: roiData.scanRoi ?? [],
-            customerRoi: roiData.customerRoi ?? [],
-          });
+          setRois(normalizeRois(roiData));
         } else {
-          setImage(null);
           setRois(emptyRois());
         }
         setStatus(null);
@@ -596,14 +630,20 @@ function RoiMarkup() {
   return (
     <section className="content roiLayout">
       <div className="roiToolbar">
-        <StatusLine loading={cameras.loading} error={cameras.error} />
-        <label>
-          Камера
-          <select value={cameraId} onChange={(event) => setCameraId(event.target.value)}>
-            <option value="">Выберите камеру</option>
-            {cameras.data.data.map((camera) => <option key={camera.id} value={camera.id}>{camera.name ?? camera.id}</option>)}
-          </select>
-        </label>
+        <StatusLine loading={cameras.loading || stores.loading || registers.loading} error={cameras.error ?? stores.error ?? registers.error} />
+        <div className="cameraPicker">
+          <label>
+            Поиск камеры
+            <input value={cameraSearch} onChange={(event) => setCameraSearch(event.target.value)} placeholder="Название, магазин, касса или id" />
+          </label>
+          <label>
+            Camera ID
+            <input value={cameraId} onChange={(event) => setCameraId(event.target.value.trim())} placeholder="camera_id" />
+          </label>
+        </div>
+        <CameraSelection cameras={filteredCameraOptions} refs={cameraRefs} selectedCameraId={cameraId} onSelect={setCameraId} />
+        {!cameras.loading && !cameras.error && cameraOptions.length === 0 && <div className="status warning"><AlertTriangle size={16} /> Камеры не найдены. Создайте камеру в разделе магазинов или введите Camera ID вручную.</div>}
+        {!cameras.loading && cameraOptions.length > 0 && filteredCameraOptions.length === 0 && <div className="empty">По этому поиску камер нет</div>}
         <form className="uploadForm" onSubmit={uploadReferenceImage}>
           <label>Reference image<input name="file" type="file" accept="image/jpeg,image/png,image/webp" /></label>
           <label>Width<input name="width" type="number" min="1" /></label>
@@ -620,7 +660,7 @@ function RoiMarkup() {
               <img src={imageUrl} alt="ROI reference" />
               <svg className="roiOverlay" viewBox="0 0 1 1" preserveAspectRatio="none" onClick={addPoint}>
                 {(["cashierRoi", "scanRoi", "customerRoi"] as RoiGroup[]).flatMap((group) =>
-                  rois[group].map((polygon, index) => (
+                  ensureRoiArray(rois[group]).map((polygon, index) => (
                     <polygon key={`${group}-${index}`} points={toSvgPoints(polygon.points)} fill={roiConfig[group].color} fillOpacity="0.2" stroke={roiConfig[group].color} strokeWidth="0.006" />
                   )),
                 )}
@@ -658,14 +698,35 @@ function RoiMarkup() {
   );
 }
 
+function CameraSelection({ cameras, refs, selectedCameraId, onSelect }: { cameras: CameraType[]; refs: { stores: Map<string, Store>; registers: Map<string, Register> }; selectedCameraId: string; onSelect: (cameraId: string) => void }) {
+  if (!cameras.length) return null;
+  return (
+    <div className="cameraChoiceGrid">
+      {cameras.map((camera) => {
+        const register = camera.registerId ? refs.registers.get(camera.registerId) : undefined;
+        const storeId = camera.storeId ?? register?.storeId;
+        const store = storeId ? refs.stores.get(storeId) : undefined;
+        return (
+          <button className={selectedCameraId === camera.id ? "active" : ""} key={camera.id} onClick={() => onSelect(camera.id)}>
+            <strong>{formatCameraName(camera)}</strong>
+            <span>{store ? formatStoreName(store) : storeId ?? "магазин не указан"}</span>
+            <span>{register ? formatRegisterName(register) : camera.registerId ?? "касса не указана"}</span>
+            <small>{camera.id}</small>
+          </button>
+        );
+      })}
+    </div>
+  );
+}
+
 function RoiList({ rois, onRemove }: { rois: Omit<CameraRois, "image">; onRemove: (group: RoiGroup, index: number) => void }) {
   return (
     <div className="roiList">
       {(["cashierRoi", "scanRoi", "customerRoi"] as RoiGroup[]).map((group) => (
         <div key={group}>
           <h3 style={{ color: roiConfig[group].color }}>{roiConfig[group].label}</h3>
-          {rois[group].length === 0 && <p className="hint">Нет полигонов</p>}
-          {rois[group].map((polygon, index) => (
+          {ensureRoiArray(rois[group]).length === 0 && <p className="hint">Нет полигонов</p>}
+          {ensureRoiArray(rois[group]).map((polygon, index) => (
             <div className="roiListItem" key={`${group}-${index}`}>
               <span>{polygon.label} · {polygon.points.length} точек</span>
               <button aria-label="Удалить polygon" title="Удалить polygon" onClick={() => onRemove(group, index)}><Trash2 size={16} /></button>
@@ -868,6 +929,10 @@ function compact<T extends Record<string, unknown>>(payload: T) {
   return Object.fromEntries(Object.entries(payload).filter(([, value]) => value !== "" && value !== undefined && value !== null));
 }
 
+function hasEntityId<T extends { id?: unknown }>(value: T | null | undefined): value is T & { id: string } {
+  return typeof value?.id === "string" && value.id.length > 0;
+}
+
 function clampPoint(point: RoiPoint): RoiPoint {
   return {
     x: Math.min(1, Math.max(0, point.x)),
@@ -879,9 +944,56 @@ function toSvgPoints(points: RoiPoint[]) {
   return points.map((point) => `${point.x},${point.y}`).join(" ");
 }
 
+function normalizeRois(value: Partial<CameraRois> | null | undefined): Omit<CameraRois, "image"> {
+  return {
+    cashierRoi: normalizeRoiGroup(value?.cashierRoi),
+    scanRoi: normalizeRoiGroup(value?.scanRoi),
+    customerRoi: normalizeRoiGroup(value?.customerRoi),
+  };
+}
+
+function imageMetadataFromUrl(url: string, id: string): Promise<RoiImage> {
+  return new Promise((resolve) => {
+    const img = new Image();
+    img.onload = () => resolve({ id, width: img.naturalWidth || 1, height: img.naturalHeight || 1 });
+    img.onerror = () => resolve({ id, width: 1, height: 1 });
+    img.src = url;
+  });
+}
+
+function normalizeRoiGroup(value: unknown): RoiPolygon[] {
+  if (!Array.isArray(value)) return [];
+  return value
+    .map((polygon, index) => normalizeRoiPolygon(polygon, index))
+    .filter((polygon): polygon is RoiPolygon => polygon !== null);
+}
+
+function ensureRoiArray(value: unknown): RoiPolygon[] {
+  return Array.isArray(value) ? value : [];
+}
+
+function normalizeRoiPolygon(value: unknown, index: number): RoiPolygon | null {
+  if (!value || typeof value !== "object") return null;
+  const polygon = value as Record<string, unknown>;
+  const points = Array.isArray(polygon.points) ? polygon.points.map(normalizeRoiPoint).filter((point): point is RoiPoint => point !== null) : [];
+  if (points.length === 0) return null;
+  return {
+    label: typeof polygon.label === "string" && polygon.label ? polygon.label : `polygon-${index + 1}`,
+    points,
+    metadata: polygon.metadata && typeof polygon.metadata === "object" && !Array.isArray(polygon.metadata) ? polygon.metadata as Record<string, unknown> : {},
+  };
+}
+
+function normalizeRoiPoint(value: unknown): RoiPoint | null {
+  if (!value || typeof value !== "object") return null;
+  const point = value as Record<string, unknown>;
+  if (typeof point.x !== "number" || typeof point.y !== "number") return null;
+  return clampPoint({ x: point.x, y: point.y });
+}
+
 function validateRois(rois: Omit<CameraRois, "image">) {
   for (const group of ["cashierRoi", "scanRoi", "customerRoi"] as RoiGroup[]) {
-    for (const polygon of rois[group]) {
+    for (const polygon of ensureRoiArray(rois[group])) {
       if (polygon.points.length < 3) return `${roiConfig[group].label}: минимум 3 точки на polygon`;
       if (polygon.points.some((point) => point.x < 0 || point.x > 1 || point.y < 0 || point.y > 1)) {
         return `${roiConfig[group].label}: координаты должны быть в диапазоне 0..1`;
@@ -926,6 +1038,22 @@ function transcriptLabels(event: SpeechEvent, refs: TranscriptRefs) {
     register: register ? formatRegisterName(register) : event.registerId,
     camera: camera ? formatCameraName(camera) : event.cameraId,
   };
+}
+
+function cameraSearchText(camera: CameraType, refs: { stores: Map<string, Store>; registers: Map<string, Register> }) {
+  const register = camera.registerId ? refs.registers.get(camera.registerId) : undefined;
+  const storeId = camera.storeId ?? register?.storeId;
+  const store = storeId ? refs.stores.get(storeId) : undefined;
+  return [
+    camera.id,
+    camera.name,
+    camera.storeId,
+    camera.registerId,
+    store?.name,
+    store?.city,
+    register?.name,
+    register?.code,
+  ].filter(Boolean).join(" ").toLowerCase();
 }
 
 function formatStoreName(store: Store) {

@@ -118,6 +118,57 @@ export async function apiBlob(path: string, init: RequestInit = {}, retry = true
   return response.blob();
 }
 
+function normalizeListResponse<T>(value: unknown): ListResponse<T> {
+  if (Array.isArray(value)) {
+    return { data: value as T[], pagination: { page: 1, limit: value.length, total: value.length } };
+  }
+
+  if (value && typeof value === "object") {
+    const record = value as Record<string, unknown>;
+    if (Array.isArray(record.data)) {
+      return {
+        data: record.data as T[],
+        pagination: normalizePagination(record.pagination, record.data.length),
+      };
+    }
+    if (record.data && typeof record.data === "object") {
+      const nested = record.data as Record<string, unknown>;
+      if (Array.isArray(nested.data)) {
+        return {
+          data: nested.data as T[],
+          pagination: normalizePagination(nested.pagination ?? record.pagination, nested.data.length),
+        };
+      }
+      if (Array.isArray(nested.items)) {
+        return {
+          data: nested.items as T[],
+          pagination: normalizePagination(nested.pagination ?? record.pagination, nested.items.length),
+        };
+      }
+    }
+    if (Array.isArray(record.items)) {
+      return {
+        data: record.items as T[],
+        pagination: normalizePagination(record.pagination, record.items.length),
+      };
+    }
+  }
+
+  return { data: [], pagination: { page: 1, limit: 0, total: 0 } };
+}
+
+function normalizePagination(value: unknown, fallbackTotal: number) {
+  if (value && typeof value === "object") {
+    const pagination = value as Record<string, unknown>;
+    return {
+      page: typeof pagination.page === "number" ? pagination.page : 1,
+      limit: typeof pagination.limit === "number" ? pagination.limit : fallbackTotal,
+      total: typeof pagination.total === "number" ? pagination.total : fallbackTotal,
+    };
+  }
+  return { page: 1, limit: fallbackTotal, total: fallbackTotal };
+}
+
 export const api = {
   login: (email: string, password: string) =>
     apiRequest<AuthResponse>("/auth/login", {
@@ -126,7 +177,7 @@ export const api = {
     }),
   me: () => apiRequest<AuthResponse["user"]>("/auth/me"),
   logout: () => apiRequest<void>("/auth/logout", { method: "POST" }),
-  list: <T>(path: string) => apiRequest<ListResponse<T>>(path),
+  list: async <T>(path: string) => normalizeListResponse<T>(await apiRequest<unknown>(path)),
   get: <T>(path: string) => apiRequest<T>(path),
   blob: (path: string) => apiBlob(path),
   post: <T>(path: string, body?: unknown) =>

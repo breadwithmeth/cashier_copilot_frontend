@@ -338,6 +338,44 @@ select {
   grid-template-columns: minmax(220px, 1.4fr) repeat(3, minmax(120px, 0.7fr)) auto;
 }
 
+.cameraPicker {
+  display: grid;
+  gap: 12px;
+  grid-template-columns: minmax(240px, 1fr) minmax(220px, 1fr);
+}
+
+.cameraChoiceGrid {
+  display: grid;
+  gap: 10px;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  max-height: 260px;
+  overflow: auto;
+  padding-right: 4px;
+}
+
+.cameraChoiceGrid button {
+  background: #ffffff;
+  border: 1px solid #d7dde7;
+  border-radius: 8px;
+  color: #1f2937;
+  display: grid;
+  gap: 4px;
+  padding: 12px;
+  text-align: left;
+}
+
+.cameraChoiceGrid button.active {
+  border-color: #2f7d68;
+  box-shadow: 0 0 0 2px rgba(47, 125, 104, 0.14);
+}
+
+.cameraChoiceGrid span,
+.cameraChoiceGrid small {
+  color: #667085;
+  font-size: 12px;
+  overflow-wrap: anywhere;
+}
+
 .uploadForm .primary,
 .roiActions .primary {
   align-items: center;
@@ -563,6 +601,8 @@ select {
   .metricGrid,
   .formGrid,
   .uploadForm,
+  .cameraPicker,
+  .cameraChoiceGrid,
   .roiEditor,
   .transcriptLayout,
   .filterBar,
